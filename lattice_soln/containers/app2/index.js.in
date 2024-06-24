@@ -41,9 +41,12 @@ app.all('/app[1234]/call-to-app[1234]', (req, res) => {
     if (process.env.PROXY_URL != '') {
         url = process.env.PROXY_URL
         client = require('http')
+        headers = {
+            host: host
+        }
         options = {
-            hostname: host,
-            port: 80,
+            hostname: 'localhost',
+            port: 8080,
             path: '/',
             method: 'GET',
             headers: headers

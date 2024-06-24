@@ -228,8 +228,9 @@ class LatticeSolnStack(Stack):
             vpc=vpc,
             instance_type=ec2.InstanceType("m5.large"),
             machine_image=ecs.EcsOptimizedImage.amazon_linux2(),
-            desired_capacity=3,
+            desired_capacity=4,
             role=ecs_asg_role,
+            # spot_price="0.09"
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
             )
 
