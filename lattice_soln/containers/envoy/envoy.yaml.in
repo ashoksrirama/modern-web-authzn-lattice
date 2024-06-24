@@ -45,6 +45,14 @@ static_resources:
                   envoy.filters.http.dynamic_forward_proxy:
                     "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.PerRouteConfig
                     host_rewrite_literal: app3.${APP_DOMAIN}
+              - match:
+                  prefix: '/app4'
+                route:
+                  cluster: outbound_proxy
+                typed_per_filter_config:
+                  envoy.filters.http.dynamic_forward_proxy:
+                    "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.PerRouteConfig
+                    host_rewrite_literal: app4.${APP_DOMAIN}
               # Catch all - send to app1
               - match:
                   prefix: '/'

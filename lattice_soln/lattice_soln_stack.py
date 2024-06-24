@@ -326,7 +326,7 @@ class LatticeSolnStack(Stack):
                 desired_count=2,
                 task_definition=envoy_frontend_task_definition,
                 memory_limit_mib=2048,
-                public_load_balancer=False,
+                public_load_balancer=True,
                 certificate=cert
             )
 
@@ -372,8 +372,20 @@ class LatticeSolnStack(Stack):
             platform=Platform.LINUX_AMD64,
             build_args={"no-cache":"true"}
         )
+        
+        # Build the docker container for our app server. This is reused in three task definitions, one for each app component
+        webserver_asset_wosigv4 = DockerImageAsset(
+            self,
+            "webserver2",
+            directory=os.path.join(
+                os.path.dirname(os.path.realpath(__file__)), "containers/app2"
+            ),
+            asset_name="webserver2",
+            platform=Platform.LINUX_AMD64,
+            build_args={"no-cache":"true"}
+        )
 
-        for name in ("app1", "app2", "app3"):
+        for name in ("app1", "app2", "app3", "app4"):
             # Create an iam role for the task running the app. This allows the task to perform sigv4 signing to access lattice
             id = name + "TaskRole"
             app_role = iam.Role(
@@ -406,7 +418,7 @@ class LatticeSolnStack(Stack):
             # Store the new task role to our list
             roles[name] = app_role
 
-        for name in ("app1", "app2", "app3"):
+        for name in ("app1", "app2", "app3", "app4"):
             # Create a task definition for our app component
             task_definition = ecs.Ec2TaskDefinition(
                 self,
@@ -418,17 +430,48 @@ class LatticeSolnStack(Stack):
             application_env['WEBSERVER']=name
             docker_labels={}
             docker_labels['webserver']=name
-            task_definition.add_container(
-                name + "-container",
-                image=ecs.ContainerImage.from_docker_image_asset(webserver_asset),
-                cpu=256,
-                memory_limit_mib=256,
-                essential=True,
-                environment=application_env,
-                logging=ecs.AwsLogDriver.aws_logs(stream_prefix=name),
-                port_mappings=[ecs.PortMapping(container_port=80)],
-                docker_labels=docker_labels
-            )
+            if (name=="app4"):
+                application_env['PROXY_URL']='http://localhost:8080'
+                task_definition.add_container(
+                    name + "-container",
+                    image=ecs.ContainerImage.from_docker_image_asset(webserver_asset_wosigv4),
+                    cpu=256,
+                    memory_limit_mib=256,
+                    essential=True,
+                    environment=application_env,
+                    logging=ecs.AwsLogDriver.aws_logs(stream_prefix=name),
+                    port_mappings=[ecs.PortMapping(container_port=80)],
+                    docker_labels=docker_labels
+                )
+                
+                task_definition.add_container(
+                    name + "-sigv4-proxy",
+                    image=ecs.ContainerImage.from_registry("public.ecr.aws/aws-observability/aws-sigv4-proxy:1.8"),
+                    cpu=256,
+                    memory_limit_mib=256,
+                    command=["--verbose",
+                        "--log-failed-requests",
+                        "--log-signing-process",
+                        "--no-verify-ssl",
+                        "--name=vpc-lattice-svcs",
+                        "--region="+Stack.of(self).region,
+                        "--unsigned-payload"
+                    ],
+                    logging=ecs.AwsLogDriver.aws_logs(stream_prefix=name),
+                    port_mappings=[ecs.PortMapping(container_port=8080)]
+                )
+            else:
+                task_definition.add_container(
+                    name + "-container",
+                    image=ecs.ContainerImage.from_docker_image_asset(webserver_asset),
+                    cpu=256,
+                    memory_limit_mib=256,
+                    essential=True,
+                    environment=application_env,
+                    logging=ecs.AwsLogDriver.aws_logs(stream_prefix=name),
+                    port_mappings=[ecs.PortMapping(container_port=80)],
+                    docker_labels=docker_labels
+                )
 
             # Create a TLS certificate for our lattice service
             cert = certificatemanager.PrivateCertificate(self, name + "." +app_domain+"-certificate", 
@@ -476,7 +519,7 @@ class LatticeSolnStack(Stack):
                 statements = [
                     iam.PolicyStatement(
                         actions=["vpc-lattice-svcs:Invoke"],
-                        principals=[iam.ArnPrincipal(roles["app2"].role_arn)],
+                        principals=[iam.ArnPrincipal(roles["app2"].role_arn), iam.ArnPrincipal(roles["app4"].role_arn)],
                         resources=[latticeservice.attr_arn + "/*"],
                     )
                 ]
@@ -524,6 +567,19 @@ class LatticeSolnStack(Stack):
                         )
                     ]
 
+                authpolicy = iam.PolicyDocument(statements=statements)
+            elif(name=="app4"):
+                # app4 policy allows all clients
+                statements = [
+                    iam.PolicyStatement(
+                        actions=["vpc-lattice-svcs:Invoke"],
+                        principals=[
+                            iam.ArnPrincipal(roles["envoy-frontend"].role_arn),
+                            iam.ArnPrincipal(roles["app2"].role_arn)
+                        ],
+                        resources=[latticeservice.attr_arn + "/*"],
+                    )
+                ]
                 authpolicy = iam.PolicyDocument(statements=statements)
             else:
                 # no auth policy for app3
